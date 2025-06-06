@@ -5,6 +5,7 @@ Ce script shell configure un nœud (maître ou worker) pour un cluster Kubernete
 ## 🛠️ Pré-requis
 
 - Ubuntu/Debian
+- kata-container installer
 - Droits `sudo`
 
 ## 📜 Script Bash
@@ -70,3 +71,9 @@ if [ "$1" == "master" ]; then
   sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
   sudo chown $(id -u):$(id -g) $HOME/.kube/config
 fi
+
+Une fois ce script executé et le cluster initialisé, lancer :
+cilium install
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml (ou une version plus récente)
+kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
+puis appliquer le fichier de deploiement .yaml
