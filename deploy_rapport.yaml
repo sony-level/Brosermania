@@ -1,0 +1,354 @@
+# Partie 1 : Configuration du Runtime et du Réseau
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata
+handler: kata
+# Cette configuration définit une RuntimeClass nommée "kata" utilisant le runtime Kata Containers.
+# Elle permet d'exécuter les pods dans un environnement de machine virtuelle légère pour une meilleure isolation et sécurité.
+---
+
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: internal-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 10.10.32.150-10.10.32.155
+# Cette ressource définit un pool d'adresses IP pour MetalLB, utilisé pour attribuer des adresses aux services de type LoadBalancer.
+# Le pool est nommé "internal-pool" et couvre la plage d'adresses de 10.10.32.150 à 10.10.32.155.
+# Il est défini dans le namespace "metallb-system".
+---
+
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: internal-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - internal-pool
+# Cette configuration configure MetalLB pour annoncer le pool d'adresses IP "internal-pool" via le protocole de couche 2 (ARP).
+# Elle est nommée "internal-l2" et réside dans le namespace "metallb-system".
+---
+
+# Partie 2 : Stockage Persistant et Configuration
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/mysql-data
+  persistentVolumeReclaimPolicy: Retain
+# Ce PersistentVolume (PV) nommé "mysql-pv" définit un stockage de 1Go pour MySQL.
+# Il utilise un chemin d'hôte (/tmp/mysql-data) pour le stockage local.
+# L'accès est en mode "ReadWriteOnce" (lecture/écriture par un seul nœud).
+# La politique de récupération est "Retain", ce qui conserve le PV après utilisation.
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: mysql-pv
+# Ce PersistentVolumeClaim (PVC) nommé "mysql-pvc" demande 1Go de stockage.
+# Il est lié au PV "mysql-pv" et utilise le mode d'accès "ReadWriteOnce".
+# Ce PVC est utilisé par le pod MySQL pour accéder au stockage persistant.
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init-script
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS brow2025;
+    USE brow2025;
+
+    CREATE TABLE IF NOT EXISTS roles (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL,
+        role_id INT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+    );
+
+    INSERT IGNORE INTO roles (id, name) VALUES
+    (1, 'admin'),
+    (2, 'user');
+
+    INSERT IGNORE INTO users (username, email, password, role_id) VALUES
+    ('adminuser', 'admin8@example.com', '$2b$04$s4urY49Pr3RtiJxL6eBQ.ey/ssPxhxq/ciXiHHokr8AFWmnoQZYLO', 1),
+    ('badr', 'badr.moussaoui2@gmail.com', '$2b$04$c.G3L4yuM2inFVjchU1UKOe6tHrsp2.og8R8Hwx/6Yr/ZYJeVkwBq', 2);
+# Ce ConfigMap nommé "mysql-init-script" contient un script SQL (init.sql) pour initialiser la base de données MySQL.
+# Il crée une base de données "brow2025", des tables "roles" et "users", et insère des données initiales (rôles et utilisateurs avec mots de passe hachés).
+---
+
+# Partie 3 : Pod et Service MySQL
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  containers:
+  - name: mysql
+    image: mysql:8
+    ports:
+    - containerPort: 3306
+    env:
+    - name: MYSQL_ROOT_PASSWORD
+      value: "rootpassword"
+    volumeMounts:
+    - name: mysql-data
+      mountPath: /var/lib/mysql
+    - name: initdb
+      mountPath: /docker-entrypoint-initdb.d
+  volumes:
+  - name: mysql-data
+    persistentVolumeClaim:
+      claimName: mysql-pvc
+  - name: initdb
+    configMap:
+      name: mysql-init-script
+# Ce pod nommé "mysql" exécute un conteneur MySQL version 8.
+# Il expose le port 3306, définit le mot de passe root via la variable d'environnement MYSQL_ROOT_PASSWORD.
+# Il monte le volume persistant "mysql-data" (lié au PVC "mysql-pvc") à /var/lib/mysql pour les données.
+# Il monte le ConfigMap "mysql-init-script" à /docker-entrypoint-initdb.d pour l'initialisation de la base.
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+spec:
+  selector:
+    app: mysql
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+# Ce service nommé "mysql-service" expose le pod MySQL à l'intérieur du cluster.
+# Il cible les pods avec le label "app: mysql" et mappe le port 3306 au port 3306 du conteneur.
+---
+
+# Partie 4 : Stockage pour le Backend
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: backapi-pv-temp
+spec:
+  capacity:
+    storage: 500Mi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/backapi-temp-data
+  persistentVolumeReclaimPolicy: Retain
+# Ce PersistentVolume nommé "backapi-pv-temp" fournit 500Mo de stockage pour le backend.
+# Il utilise un chemin d'hôte (/tmp/backapi-temp-data) et le mode d'accès "ReadWriteOnce".
+# La politique de récupération est "Retain".
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backapi-temp-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+  volumeName: backapi-pv-temp
+# Ce PersistentVolumeClaim nommé "backapi-temp-pvc" demande 500Mo de stockage.
+# Il est lié au PV "backapi-pv-temp" et utilise le mode d'accès "ReadWriteOnce".
+---
+
+
+# Partie 5 : Permissions pour le Backend
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cnp-manager
+  namespace: default
+# Ce ServiceAccount nommé "cnp-manager" fournit une identité pour le backend afin d'interagir avec l'API Kubernetes.
+# Il est défini dans le namespace "default".
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnp-manager-role
+rules:
+- apiGroups: ["cilium.io"]
+  resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["namespaces","services"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Ce ClusterRole nommé "cnp-manager-role" définit les permissions pour gérer les politiques réseau Cilium et les opérations de base sur les pods et namespaces.
+# Il permet les actions get, list, watch, create, update, patch, et delete sur les ressources spécifiées.
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnp-manager-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cnp-manager-role
+subjects:
+- kind: ServiceAccount
+  name: cnp-manager
+  namespace: default
+# Ce ClusterRoleBinding nommé "cnp-manager-binding" lie le rôle "cnp-manager-role" au ServiceAccount "cnp-manager".
+# Cela permet au backend d'exécuter les actions autorisées par le rôle.
+---
+
+# Partie 6 : Déploiement et Service Backend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backapi-deployment
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backapi
+  template:
+    metadata:
+      labels:
+        app: backapi
+    spec:
+      serviceAccountName: cnp-manager
+      containers:
+      - name: backapi
+        image: badr2/finalebacknd:latest2
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          value: "mysql://root:rootpassword@mysql-service:3306/brow2025"
+        - name: JWT_SECRET
+          value: "admin@@2025"
+        - name: ADMIN_SECRET_CODE
+          value: "Admin@@"
+        - name: REACT_APP_API_URL
+          value: "http://backapi-service:8080/"
+        volumeMounts:
+        - name: temp-volume
+          mountPath: /app/temp
+      volumes:
+      - name: temp-volume
+        persistentVolumeClaim:
+          claimName: backapi-temp-pvc
+# Ce déploiement nommé "backapi-deployment" gère l'application backend avec une seule réplique.
+# Il utilise le ServiceAccount "cnp-manager" pour les permissions.
+# Le conteneur exécute l'image "badr2/browser:backend-latest", expose le port 8080.
+# Les variables d'environnement définissent la connexion à la base de données, le secret JWT, et l'URL de l'API.
+# Un volume persistant est monté à /app/temp, lié au PVC "backapi-temp-pvc".
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: backapi-service
+  namespace: default
+spec:
+  selector:
+    app: backapi
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  type: LoadBalancer
+  loadBalancerIP: 10.10.32.151
+# Ce service nommé "backapi-service" expose le backend à l'extérieur via un LoadBalancer.
+# Il cible les pods avec le label "app: backapi" et mappe le port 8080.
+# L'adresse IP 10.10.32.151 est assignée via MetalLB.
+---
+
+# Partie 7 : Déploiement et Service Frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: badr2/finalefrontend:dynamic3
+        ports:
+        - containerPort: 80
+        env:
+        - name: REACT_APP_API_URL
+          value: "http://10.10.32.151:8080"
+# Ce déploiement nommé "frontend-deployment" gère l'application frontend React avec une seule réplique.
+# Le conteneur exécute l'image "badr2/finalefrontend:dynamic1", expose le port 80.
+# La variable d'environnement REACT_APP_API_URL pointe vers l'IP du service backend, il faut changer cette variable si l'on à une IP différente pour le svc
+# qui défini le backend.
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: default
+spec:
+  selector:
+    app: frontend
+  ports:
+  - protocol: TCP
+    port: 3000
+    targetPort: 80
+  type: LoadBalancer
+  loadBalancerIP: 10.10.32.150
+# Ce service nommé "frontend-service" expose le frontend à l'extérieur via un LoadBalancer.
+# Il cible les pods avec le label "app: frontend" et mappe le port 3000 au port 80 du conteneur.
+# L'adresse IP 10.10.32.150 est statique, mais peux être changé en fonction du réseau.
+
+
+# Résumé
+# Ce fichier YAML configure une pile d'applications complète dans Kubernetes :
+# - **Réseau** : Configure MetalLB pour le load balancing et l'attribution d'IP.
+# - **Stockage** : Fournit un stockage persistant pour MySQL et le backend.
+# - **Base de données** : Exécute MySQL avec des tables et données initialisées.
+# - **Backend** : Déploie une API backend avec des permissions pour gérer les politiques réseau.
+# - **Frontend** : Déploie une application React qui communique avec le backend.
+# - **Navigateur** : Exécute une instance Chromium pour tester ou rendre du contenu web.
+# Chaque composant est configuré pour assurer une communication, une persistance, et une accessibilité externe correctes.
