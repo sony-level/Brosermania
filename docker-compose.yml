@@ -1,0 +1,53 @@
+# ✅ Version supprimée (obsolète)
+services:
+  # Service backend (API Rust)
+  backend:
+    build:
+      context: ./API_interface/API
+      dockerfile: Dockerfile
+    container_name: secure-browser-api
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=mysql://root@host.docker.internal:3307/brow2025
+      - JWT_SECRET=admin@@2025
+      - ADMIN_SECRET_CODE=Admin@@
+      - SQLX_OFFLINE=true
+    volumes:
+      - ~/.kube:/root/.kube:ro
+      - ./API_interface/API/temp:/app/temp
+    networks:
+      - app-network
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # ✅ Healthcheck simplifié sans curl
+    healthcheck:
+      test: ["CMD", "netstat", "-an", "|", "grep", "8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Service frontend (React)
+  frontend:
+    build:
+      context: ./CLIENT_interface/client
+      dockerfile: Dockerfile
+    container_name: secure-browser-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_started  # ✅ Changé de healthy à started
+    networks:
+      - app-network
+    restart: unless-stopped
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+
+networks:
+  app-network:
+    # ✅ Utiliser le réseau existant
+    external: true
+    name: secure-browser-network
