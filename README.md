@@ -72,8 +72,12 @@ if [ "$1" == "master" ]; then
   sudo chown $(id -u):$(id -g) $HOME/.kube/config
 fi
 
+```
+
 Une fois ce script executé et le cluster initialisé, lancer :
+```bash
 cilium install
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml (ou une version plus récente)
 kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
 puis appliquer le fichier de deploiement .yaml
+``
